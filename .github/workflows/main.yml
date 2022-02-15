@@ -1,0 +1,75 @@
+# This is a basic workflow to help you get started with Actions
+
+name: BUILD
+  # Add your env stuff here
+env:
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the main branch
+  pull_request:
+    branches: [ main ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v2
+
+      - name: Install tools
+        run: |
+          wget -q https://github.com/mozilla/sops/releases/download/v3.7.1/sops-v3.7.1.linux -O /usr/local/bin/sops
+          chmod a+x /usr/local/bin/sops
+          
+          wget -q https://get.helm.sh/helm-v3.8.0-linux-amd64.tar.gz -O- | tar -xz --strip-components=1 -C /usr/local/bin
+          chmod a+x /usr/local/bin/helm
+          
+          wget -q https://github.com/roboll/helmfile/releases/download/v0.143.0/helmfile_linux_amd64 -O /usr/local/bin/helmfile
+          chmod a+x /usr/local/bin/helmfile
+          
+          wget  -q "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" -O /usr/local/bin/kubectl
+          
+          helm plugin install https://github.com/jkroepke/helm-secrets
+          helm plugin install https://github.com/databus23/helm-diff
+
+      - name: Setup Gcloud
+        uses: google-github-actions/setup-gcloud@v0
+        with:
+          export_default_credentials: true
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          service_account_key: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Check that we have access to the cluster
+        run: |
+          gcloud info
+          gcloud config set  project ${{ env.GCP_PROJECT_ID }}
+
+      - name: Configure docker and kubectl
+        run: |
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+          gcloud container clusters get-credentials ${{ env.GKE_CLUSTER_NAME }} --region ${{ env.GCP_REGION }} --project ${{ env.GCP_PROJECT_ID }}
+          kubectl cluster-info
+          kubectl config current-context
+
+
+      # Runs a single command using the runners shell
+      - name: Run Docker build
+        run: docker build . -t ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_ARTIFACT_REPOSITORY }}/myapp:${GITHUB_SHA}
+
+      - name: Push image to artifacter
+        run: |
+          docker push ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_ARTIFACT_REPOSITORY }}/myapp:${GITHUB_SHA}
+
+      - name: Deploy using helmfile
+        run: |
+          helmfile --debug -e dev sync --set nameOverride=myapp-${GITHUB_SHA} --set image.repository=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_ARTIFACT_REPOSITORY }}/myapp --set image.tag=${GITHUB_SHA}

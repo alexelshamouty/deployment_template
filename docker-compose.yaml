@@ -1,0 +1,13 @@
+version: "3.9"
+
+services:
+  myapp:
+    volumes:
+      - ./src:/app/src
+    environment:
+      ENV_EXAMPLE: ENVVALUE
+    ports:
+      - "9000:9000"
+    env_file:
+      - secrets.yaml
+    #depends_on:
